@@ -21,7 +21,7 @@ from typing import List
 
 
 load_dotenv()
-collection_module = os.getenv("COLLECTION_MODULE")
+pyansys_module = os.getenv("PYANSYS_MODULE")
 
 
 # Embedding model
@@ -36,32 +36,32 @@ embed_model = NVIDIAEmbeddings(
 qdrant_client = QdrantClient(path="langchain_qdrant")
 vector_store = QdrantVectorStore(
     client=qdrant_client,
-    collection_name=f"{collection_module}",
+    collection_name=f"{pyansys_module}",
     embedding=embed_model,
 )
 
 async def list_documentation_pages() -> List[str]:
     """
-    Retrieve a list of all available module documentation pages.
+    Retrieve a list of all available PyAnsys module documentation pages.
     
     Returns:
         List[str]: List of unique URLs for all documentation pages
     """
     try:
-        # result = supabase.from_(f'{collection_module}_site_pages') \
+        # result = supabase.from_(f'{pyansys_module}_site_pages') \
         #     .select('url') \
-        #     .eq('metadata->>source', f'{collection_module}_docs') \
+        #     .eq('metadata->>source', f'{pyansys_module}_docs') \
         #     .execute()
         
         url_filter = Filter(
             must=[
                 FieldCondition(
                     key="metadata.url",
-                    match=MatchText(text="{url-here}")
+                    match=MatchText(text="https://heart.docs.pyansys.com")
                 )
             ]
         )
-        result = qdrant_client.scroll(collection_name=f"{collection_module}", scroll_filter=url_filter, with_payload=True)
+        result = qdrant_client.scroll(collection_name=f"{pyansys_module}", scroll_filter=url_filter, with_payload=True)
         
         #print(result)
         # if not result.data:
@@ -88,10 +88,10 @@ async def get_page_content(url: str) -> str:
         str: The complete page content with all chunks combined in order
     """
     try:
-        # result = supabase.from_(f'{collection_module}_site_pages') \
+        # result = supabase.from_(f'{pyansys_module}_site_pages') \
         #     .select('title, content, chunk_number') \
         #     .eq('url', url) \
-        #     .eq('metadata->>source', f'{collection_module}_docs') \
+        #     .eq('metadata->>source', f'{pyansys_module}_docs') \
         #     .order('chunk_number') \
         #     .execute()
         
@@ -103,7 +103,7 @@ async def get_page_content(url: str) -> str:
                 )
             ]
         )
-        result = qdrant_client.scroll(collection_name=f"{collection_module}", scroll_filter=content_filter, order_by="metadata.chunk_number", with_payload=True)
+        result = qdrant_client.scroll(collection_name=f"{pyansys_module}", scroll_filter=content_filter, order_by="metadata.chunk_number", with_payload=True)
         #print(result)
         # if not result.data:
         if len(result.points) == 0:
@@ -124,7 +124,7 @@ async def get_page_content(url: str) -> str:
 tools = [
     StructuredTool.from_function( 
         coroutine=list_documentation_pages, 
-        description="Retrieve a list of all available module documentation pages."
+        description="Retrieve a list of all available PyAnsys module documentation pages."
     ),
     StructuredTool.from_function(
         coroutine=get_page_content, 

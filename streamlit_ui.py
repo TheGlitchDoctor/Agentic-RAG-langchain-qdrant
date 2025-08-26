@@ -6,14 +6,14 @@ import os
 import streamlit as st
 import logging
 
-from module_ai_expert import module_ai_expert
+from pyansys_ai_expert import pyansys_ai_expert, run_agent_with_steps
 from langchain_core.messages import AIMessage, HumanMessage
 
 
 # Load environment variables
 from dotenv import load_dotenv
 load_dotenv()
-module_module = str(os.getenv("COLLECTION_MODULE"))
+pyansys_module = str(os.getenv("PYANSYS_MODULE"))
 
 # Configure logging to output to the console
 logging.basicConfig(
@@ -45,6 +45,12 @@ def display_message_part(msg):
         with st.chat_message("assistant"):
             st.markdown(msg.content)          
 
+def streamlit_update(step_text):
+    """Update function for step tracking in Streamlit."""
+    # This will be set dynamically in the streaming function
+    if hasattr(st.session_state, 'step_placeholder') and st.session_state.step_placeholder:
+        st.session_state.step_placeholder.markdown(f":gray[{step_text}]")
+
 
 async def run_agent_with_streaming(user_input: str):
     """
@@ -52,32 +58,41 @@ async def run_agent_with_streaming(user_input: str):
     while maintaining the entire conversation in `st.session_state.messages`.
     """
     try:
-        # Create a placeholder for the message
+        # Create placeholders for step tracking and response
+        step_placeholder = st.empty()
         message_placeholder = st.empty()
+        
+        # Store step placeholder in session state for the callback
+        st.session_state.step_placeholder = step_placeholder
+        
         response = ""
-        count = 1
-        # Run the agent with ainvoke for faster response
-        async for result in  module_ai_expert.astream(
-            {"input": user_input, "chat_history": st.session_state.messages[:-1]}
-        ):
-            # Render result text
-            if "output" in result:
-                for chunk in result["output"]:    
-                    response += chunk
-                    message_placeholder.markdown(response)
-            else:
-                message_placeholder.markdown("Thinking"+"."*count)
-                count+=1
-            
-            if count==4:
-                count=1
-            
-                # Add the final response to the messages
+        
+        # Use the new run_agent_with_steps function with step tracking
+        response = await run_agent_with_steps(
+            user_input, 
+            update_callback=streamlit_update,
+            chat_history=st.session_state.messages[:-1]
+        )
+        
+        # Clear the step tracking placeholder and show final response
+        step_placeholder.empty()
+        message_placeholder.markdown(response)
+                
+        # Add the final response to the messages
         st.session_state.messages.append(
             AIMessage(content=response)
         )
+        
+        # Clean up
+        if hasattr(st.session_state, 'step_placeholder'):
+            del st.session_state.step_placeholder
+            
     except Exception as e:
         logging.error(f"Exception during run_agent_with_streaming: {e}")
+        # Clear step placeholder on error
+        if hasattr(st.session_state, 'step_placeholder'):
+            st.session_state.step_placeholder.empty()
+            del st.session_state.step_placeholder
         raise
 
 
@@ -98,14 +113,14 @@ async def main():
 
     # Load and display the icon in the left column
     with col1:
-        st.image("./static/ai_agent.jpg", use_container_width=True)  # Adjust the width as needed
+        st.image("./static/pyansys_dark.png", use_container_width=True)  # Adjust the width as needed
 
     # Display the title and description in the right column
     with col2:
         #st.markdown(f"<h1 style='color: #8A0707; font-family: Monotype Corsiva; text-align: left;'>Heart</h1>", unsafe_allow_html=True)
-        st.markdown(f"<h1 style='color: #8A0707; font-family: Lucida Handwriting; text-align: left;'>Heart</h1>", unsafe_allow_html=True)
+        st.markdown(f"<h1 style='color: #FFFFFF; font-family: Lucida Handwriting; text-align: left;'>Mechanical</h1>", unsafe_allow_html=True)
         
-    st.write(f"<p style='color: #FFFFFF;'>Ask any question about the {module_module.replace('_', ' ')} module, I will assist you with the code.</p>", unsafe_allow_html=True)
+    st.write(f"<p style='color: #FFFFFF;'>Ask any question about the {pyansys_module.replace('_', ' ')} module, I will assist you with the code.</p>", unsafe_allow_html=True)
         
         
     # Initialize chat history in session state if not present
@@ -120,7 +135,7 @@ async def main():
             display_message_part(msg)
 
     # Chat input for the user
-    user_input = st.chat_input(f"What questions do you have about {module_module.replace("_", " ")}?")
+    user_input = st.chat_input(f"What questions do you have about {pyansys_module.replace('_', ' ')}?")
 
     if user_input:
         # We append a new request to the conversation explicitly

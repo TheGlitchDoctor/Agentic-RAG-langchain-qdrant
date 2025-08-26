@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
 from langchain_nvidia_ai_endpoints import ChatNVIDIA, NVIDIAEmbeddings, NVIDIARerank
 from langchain_openai import ChatOpenAI
+from openai import AsyncAzureOpenAI
 from langchain_qdrant import QdrantVectorStore
 from uuid import uuid4
 from langchain_core.documents import Document
@@ -20,17 +21,24 @@ from qdrant_client import QdrantClient
 
 
 load_dotenv()
-collection_module = os.getenv("COLLECTION_MODULE")
+pyansys_module = os.getenv("PYANSYS_MODULE")
 
-# LLM Model
-chat_model = ChatOpenAI(
-    model=os.getenv("LLM_MODEL"),
-    api_key=os.getenv("NGC_API_KEY"),
-    base_url="https://integrate.api.nvidia.com/v1",
-    temperature=0.0,
+# NVIDIA NIM LLM Model
+# chat_model = ChatOpenAI(
+#     model=os.getenv("LLM_MODEL"),
+#     api_key=os.getenv("NGC_API_KEY"),
+#     base_url="https://integrate.api.nvidia.com/v1",
+#     temperature=0.0,
+# )
+
+# Azure LLM
+openai_client = AsyncAzureOpenAI(
+    azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT_URL"),
+    api_version = os.getenv("AZURE_OPENAI_API_VERSION"),
+    api_key=os.getenv("AZURE_OPENAI_API_KEY"),
 )
 
-# Embedding model
+# NVIDIA Embedding model
 embed_model = NVIDIAEmbeddings(
     base_url="https://integrate.api.nvidia.com/v1", 
     model=os.getenv('EMBEDDING_MODEL'),
@@ -95,7 +103,7 @@ def chunk_text(text: str, chunk_size: int = 8000) -> List[str]:
     return chunks
 
 async def get_title_and_summary(chunk: str, url: str) -> Dict[str, str]:
-    """Extract title and summary using GPT-4."""
+    """Extract title and summary using gpt."""
     system_prompt = """You are an AI that extracts titles and summaries from documentation chunks.
     Return a JSON object with 'title' and 'summary' keys.
     For the title: If this seems like the start of a document, extract its title. If it's a middle chunk, derive a descriptive title.
@@ -103,20 +111,19 @@ async def get_title_and_summary(chunk: str, url: str) -> Dict[str, str]:
     Keep both title and summary concise but informative."""
     
     try:
-        # Nvidia NIM CLient
-        messages=[
-                ("system", system_prompt),
-                ("user", f"URL: {url}\n\nContent:\n{chunk[:1000]}..."),  # Send first 1000 chars for context
-            ]
-        json_model = chat_model.bind(response_format={ "type": "json_object" })
-        # Async call - currently not supported by Nvidia NIM endpoint, try it with self-hosted endpoint later
-        # response = await json_model.ainvoke(messages)
-        response = json_model.invoke(messages)
-        
-        return json.loads(response.content)
+        response = await openai_client.chat.completions.create(
+            model=os.getenv("LLM_MODEL", "o4-mini"),
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"URL: {url}\n\nContent:\n{chunk[:1000]}..."}  # Send first 1000 chars for context
+            ],
+            response_format={ "type": "json_object" }
+        )
+        return json.loads(response.choices[0].message.content)
     except Exception as e:
         print(f"Error getting title and summary: {e}")
         return {"title": "Error processing title", "summary": "Error processing summary"}
+
 
 # Not required for qdrant
 # async def get_embedding(text: str) -> List[float]:
@@ -143,7 +150,7 @@ async def process_chunk(chunk: str, chunk_number: int, url: str) -> ProcessedChu
     
     # Create metadata
     metadata = {
-        "source": f"{collection_module}_docs",
+        "source": f"{pyansys_module}_docs",
         "chunk_size": len(chunk),
         "crawled_at": datetime.now(timezone.utc).isoformat(),
         "url_path": urlparse(url).path
@@ -176,7 +183,7 @@ async def insert_chunk(chunk: ProcessedChunk):
         
         vector_store = QdrantVectorStore(
             client=qdrant_client,
-            collection_name=f"{collection_module}",
+            collection_name=f"{pyansys_module}",
             embedding=embed_model,
         )
         
@@ -207,12 +214,39 @@ async def process_and_store_document(url: str, markdown: str):
     ]
     await asyncio.gather(*insert_tasks)
 
+PROCESSED_URLS_FILE = "processed_urls.json"
+
+def load_processed_urls() -> set:
+    if os.path.exists(PROCESSED_URLS_FILE):
+        with open(PROCESSED_URLS_FILE, "r") as f:
+            return set(json.load(f))
+    return set()
+
+def save_processed_url(url: str):
+    processed = load_processed_urls()
+    processed.add(url)
+    with open(PROCESSED_URLS_FILE, "w") as f:
+        json.dump(list(processed), f)
+
+
 async def crawl_parallel(urls: List[str], max_concurrent: int = 15):
     """Crawl multiple URLs in parallel with a concurrency limit."""
+    processed_urls = load_processed_urls()
+    urls_to_process = [url for url in urls if url not in processed_urls]
+    
+    if not urls_to_process:
+        print("All URLs have already been processed.")
+        return
     
     # Replace with your actual cookies obtained from the browser after logging in
     github_sso_cookies = [
-        ]
+        {"name": "__Host-gh_pages_id", "value": "31249389", "domain": "heart.docs.pyansys.com", "path": "/", "httpOnly": True, "secure": True},
+        {"name": "__Host-gh_pages_session", "value": "373e7a73-dfb8-4911-baae-ca3e0b4b52d8", "domain": "heart.docs.pyansys.com", "path": "/", "httpOnly": True, "secure": True},
+        {"name": "__Host-gh_pages_token", "value": "GHSAT0AAAAAAC43JF6G4SNWNUW3JCMDY2ZUZ5CNJEA", "domain": "heart.docs.pyansys.com", "path": "/", "httpOnly": True, "secure": True},
+        {"name": "_ga", "value": "GA1.1.188032431.1737560099", "domain": ".pyansys.com", "path": "/"},
+        {"name": "_ga_JQJKPV6ZVB", "value": "GS1.1.1738049374.4.0.1738049374.0.0.0", "domain": ".pyansys.com", "path": "/"},
+        # Add all necessary cookies here
+    ]
     
     browser_config = BrowserConfig(
         headless=True,
@@ -241,6 +275,7 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 15):
                 if result.success:
                     print(f"Successfully crawled: {url}")
                     await process_and_store_document(url, result.markdown_v2.raw_markdown)
+                    save_processed_url(url)
                 else:
                     print(f"Failed: {url} - Error: {result.error_message}")
         
@@ -249,13 +284,18 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 15):
     finally:
         await crawler.close()
 
-def get_module_docs_urls() -> List[str]:
-    """Get URLs from Module sitemap."""
+def get_pyansys_docs_urls() -> List[str]:
+    """Get URLs from PyAnsys Module sitemap."""
     sitemap_url = os.getenv("MODULE_SITEMAP_URL")  # Update with the actual URL to your sitemap.xml
     local_sitemap_path = os.getenv("LOCAL_SITEMAP_FILE")  # Update with the actual path to your local sitemap.xml
 
     # Replace with your actual cookies obtained from the browser after logging in
     github_sso_cookies = {
+        "__Host-gh_pages_id": "31249389",
+        "__Host-gh_pages_session": "373e7a73-dfb8-4911-baae-ca3e0b4b52d8",
+        "__Host-gh_pages_token": "GHSAT0AAAAAAC43JF6G4SNWNUW3JCMDY2ZUZ5CNJEA",
+        "_ga": "GA1.1.188032431.1737560099",
+        "_ga_JQJKPV6ZVB": "GS1.1.1738049374.4.0.1738049374.0.0.0",
         # Add all necessary cookies here
     }
 
@@ -285,8 +325,8 @@ def get_module_docs_urls() -> List[str]:
     return urls
 
 async def main():
-    # Get URLs from Module docs
-    urls = get_module_docs_urls()
+    # Get URLs from PyAnsys Module docs
+    urls = get_pyansys_docs_urls()
     if not urls:
         print("No URLs found to crawl")
         return
